@@ -1,0 +1,511 @@
+F3r.lacteos
+Lacteos2025
+postgresql://postgres:[YOUR-PASSWORD]@db.yztdsckgejivludpbqbt.supabase.co:5432/postgres
+
+ya ejecute el codigo sql y me salio este mensaje "Success. No rows returned" y al momento ya instale las dependecias y me salio esto "PS C:\Users\Usuario\Documents\Proyecto de Graduacion\Desarrollo del Proyecto\Proyecto lacteos-oriente> cd bk
+PS C:\Users\Usuario\Documents\Proyecto de Graduacion\Desarrollo del Proyecto\Proyecto lacteos-oriente\bk> pip install bcrypt==4.0.1 pyjwt==2.8.0
+Collecting bcrypt==4.0.1
+  Downloading bcrypt-4.0.1-cp36-abi3-win_amd64.whl.metadata (9.0 kB)
+Collecting pyjwt==2.8.0
+  Downloading PyJWT-2.8.0-py3-none-any.whl.metadata (4.2 kB)
+Downloading bcrypt-4.0.1-cp36-abi3-win_amd64.whl (152 kB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 152.9/152.9 kB 702.9 kB/s eta 0:00:00
+Downloading PyJWT-2.8.0-py3-none-any.whl (22 kB)
+Installing collected packages: pyjwt, bcrypt
+Successfully installed bcrypt-4.0.1 pyjwt-2.8.0
+
+[notice] A new release of pip is available: 24.0 -> 26.2.1
+[notice] To update, run: python.exe -m pip install --upgrade pip
+PS C:\Users\Usuario\Documents\Proyecto de Graduacion\Desarrollo del Proyecto\Proyecto lacteos-oriente\bk> " mi archivo .env lo tengo de esta manera "DATABASE_URL=postgresql://postgres:Lacteos2025@db.yztdsckgejivludpbqbt.supabase.co:5432/postgres
+PORT=8000
+ENVIRONMENT=development
+FRONTEND_URL=http://localhost:3000" 
+y en mi archivo C:\Users\Usuario\Documents\Proyecto de Graduacion\Desarrollo del Proyecto\Proyecto lacteos-oriente\bk\app\core\auth.py el codigo esta de esta manera "# app/core/auth.py
+# Maneja encriptación de contraseñas y tokens JWT
+
+import bcrypt
+import jwt
+import os
+from datetime import datetime, timedelta
+
+SECRET_KEY   = os.getenv("SECRET_KEY", "clave_secreta_cambiar_en_produccion")
+EXPIRE_HOURS = int(os.getenv("TOKEN_EXPIRE_HOURS", 8))
+
+
+def hash_password(password: str) -> str:
+    """Encripta la contraseña con bcrypt."""
+    return bcrypt.hashpw(password.encode(), bcrypt.gensalt(12)).decode()
+
+
+def verify_password(password: str, hashed: str) -> bool:
+    """Verifica si la contraseña es correcta."""
+    return bcrypt.checkpw(password.encode(), hashed.encode())
+
+
+def create_token(user_id: int, usuario: str, rol: str) -> str:
+    """Crea un token JWT con los datos del usuario."""
+    payload = {
+        "sub":     str(user_id),
+        "usuario": usuario,
+        "rol":     rol,
+        "exp":     datetime.utcnow() + timedelta(hours=EXPIRE_HOURS)
+    }
+    return jwt.encode(payload, SECRET_KEY, algorithm="HS256")
+
+
+def decode_token(token: str) -> dict:
+    """Verifica y decodifica un token JWT. Lanza excepción si es inválido."""
+    return jwt.decode(token, SECRET_KEY, algorithms=["HS256"])" 
+    y mi archivo main.py esta de esta manera "# ============================================================
+#  LÁCTEOS DE ORIENTE — Backend FastAPI completo
+#
+#  CÓMO CORRERLO:
+#    1. pip install -r requirements.txt
+#    2. Copia .env.example → .env y llena tus datos
+#    3. uvicorn app.main:app --reload --port 8000
+#    4. Abre http://localhost:8000/docs  ← documentación visual
+# ============================================================
+
+from fastapi import FastAPI, HTTPException, Query, BackgroundTasks
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field, validator
+from typing import Optional
+from datetime import date, datetime
+import logging
+
+from app.core.config  import CORS_ORIGINS, PORT, ENVIRONMENT
+from app.core.database import init_db, close_db, get_db, rec, recs
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+log = logging.getLogger(__name__)
+
+app = FastAPI(
+    title       = "Lácteos de Oriente — API",
+    description = "Sistema IoT de clasificación de calidad de leche. Guatemala.",
+    version     = "1.0.0",
+    docs_url    = "/docs",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins     = CORS_ORIGINS,
+    allow_credentials = True,
+    allow_methods     = ["*"],
+    allow_headers     = ["*"],
+)
+
+@app.on_event("startup")
+async def startup(): await init_db()
+
+@app.on_event("shutdown")
+async def shutdown(): await close_db()
+
+
+# ── MODELOS ──────────────────────────────────────────────────
+
+class DatosIoT(BaseModel):
+    temperatura: float         = Field(..., ge=-5,  le=120)
+    ph:          float         = Field(..., ge=0,   le=14)
+    lote_id:     Optional[int] = None
+
+    @validator('temperatura','ph')
+    def dos_dec(cls, v): return round(v, 2)
+
+
+class NuevoLote(BaseModel):
+    origen:          str            = Field(..., min_length=2, max_length=120)
+    operador:        str            = Field(..., min_length=2, max_length=100)
+    litros:          float          = Field(..., gt=0, le=50000)
+    densidad:        Optional[float]= Field(None, ge=1.0,  le=1.1)
+    ph_manual:       Optional[float]= Field(None, ge=0,    le=14)
+    temperatura:     Optional[float]= Field(None, ge=-5,   le=120)
+    ph_sensor:       Optional[float]= Field(None, ge=0,    le=14)
+    observaciones:   Optional[str]  = Field(None, max_length=1000)
+    proveedor_id:    Optional[int]  = None
+    fecha_recepcion: Optional[date] = None
+    numero_lote:     Optional[str]  = None
+
+    @validator('origen','operador')
+    def strip(cls, v): return v.strip()
+
+
+class Umbrales(BaseModel):
+    temp_min:        float          = Field(..., ge=-10, le=50)
+    temp_max:        float          = Field(..., ge=-10, le=50)
+    ph_min:          float          = Field(..., ge=0,   le=14)
+    ph_max:          float          = Field(..., ge=0,   le=14)
+    densidad_min:    float          = Field(..., ge=1.0, le=1.1)
+    densidad_max:    float          = Field(..., ge=1.0, le=1.1)
+    actualizado_por: Optional[str] = None
+
+
+# ── SISTEMA ──────────────────────────────────────────────────
+
+@app.get("/", tags=["Sistema"])
+async def raiz():
+    return {"sistema":"Lácteos de Oriente","version":"1.0.0",
+            "entorno":ENVIRONMENT,"docs":"/docs","timestamp":datetime.now().isoformat()}
+
+@app.get("/health", tags=["Sistema"])
+async def health():
+    try:
+        db = await get_db(); await db.fetchval("SELECT 1")
+        return {"estado":"ok","db":"conectada"}
+    except Exception as e:
+        raise HTTPException(503, f"DB no disponible: {e}")
+
+
+# ── IOT ──────────────────────────────────────────────────────
+
+@app.post("/iot/datos", tags=["IoT"], status_code=201)
+async def recibir_iot(d: DatosIoT, bg: BackgroundTasks):
+    """ESP32 llama aquí cada 10 segundos. Guarda temperatura y pH."""
+    db  = await get_db()
+    mid = await db.fetchval(
+        "INSERT INTO mediciones_iot(temperatura,ph,lote_id) VALUES($1,$2,$3) RETURNING id",
+        d.temperatura, d.ph, d.lote_id
+    )
+    bg.add_task(_check_alertas, mid, d.temperatura, d.ph, d.lote_id)
+    log.info(f"IoT → T:{d.temperatura}°C pH:{d.ph}")
+    return {"id": mid, "guardado": True}
+
+
+async def _check_alertas(mid, temp, ph, lote_id):
+    """Revisa umbrales y guarda alertas en segundo plano."""
+    try:
+        db = await get_db()
+        u  = await db.fetchrow("SELECT * FROM umbrales_calidad WHERE activo=TRUE ORDER BY id LIMIT 1")
+        if not u: return
+        if temp > u['temp_max'] or temp < u['temp_min']:
+            await db.execute("INSERT INTO alertas(tipo,valor,limite,medicion_id,lote_id) VALUES($1,$2,$3,$4,$5)",
+                             'TEMP_ALTA', temp, u['temp_max'], mid, lote_id)
+        if ph < u['ph_min']:
+            await db.execute("INSERT INTO alertas(tipo,valor,limite,medicion_id,lote_id) VALUES($1,$2,$3,$4,$5)",
+                             'PH_BAJO', ph, u['ph_min'], mid, lote_id)
+        elif ph > u['ph_max']:
+            await db.execute("INSERT INTO alertas(tipo,valor,limite,medicion_id,lote_id) VALUES($1,$2,$3,$4,$5)",
+                             'PH_ALTO', ph, u['ph_max'], mid, lote_id)
+    except Exception as e:
+        log.error(f"Error alertas: {e}")
+
+
+@app.get("/iot/ultima", tags=["IoT"])
+async def ultima():
+    """Frontend llama aquí al presionar INICIAR ANÁLISIS. Devuelve última lectura del ESP32."""
+    db  = await get_db()
+    row = await db.fetchrow("SELECT * FROM mediciones_iot ORDER BY leida_en DESC LIMIT 1")
+    if not row:
+        return {"datos": None, "mensaje": "Sin mediciones. Enciende el ESP32."}
+    return rec(row)
+
+
+@app.get("/iot/historial", tags=["IoT"])
+async def historial(
+    horas: int = Query(6,   ge=1, le=720),
+    limit: int = Query(200, ge=1, le=2000)
+):
+    """Datos para las gráficas del Dashboard. Frontend actualiza cada 15 s."""
+    db   = await get_db()
+    rows = await db.fetch(
+        "SELECT id,temperatura,ph,leida_en FROM mediciones_iot "
+        "WHERE leida_en >= NOW()-($1||' hours')::INTERVAL ORDER BY leida_en ASC LIMIT $2",
+        str(horas), limit
+    )
+    return {"horas": horas, "total": len(rows), "mediciones": recs(rows)}
+
+
+# ── LOTES ────────────────────────────────────────────────────
+
+@app.post("/lotes", tags=["Lotes"], status_code=201)
+async def crear_lote(d: NuevoLote):
+    """
+    Registra una recepción y la clasifica automáticamente.
+    Retorna accion_servo: 'derecha'(APTA) o 'izquierda'(NO APTA).
+    El ESP32 mueve el servo según este valor.
+    """
+    db  = await get_db()
+    lid = await db.fetchval(
+        """INSERT INTO lotes(origen,operador,litros,densidad,ph_manual,
+           temperatura,ph_sensor,observaciones,proveedor_id,fecha_recepcion,numero_lote)
+           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,COALESCE($10,CURRENT_DATE),$11) RETURNING id""",
+        d.origen, d.operador, d.litros, d.densidad, d.ph_manual,
+        d.temperatura, d.ph_sensor, d.observaciones, d.proveedor_id,
+        d.fecha_recepcion, d.numero_lote
+    )
+    await db.execute("SELECT clasificar_lote($1)", lid)
+    row = await db.fetchrow("SELECT numero_lote,apta,motivo_rechazo FROM lotes WHERE id=$1", lid)
+    log.info(f"Lote {row['numero_lote']} → {'APTA' if row['apta'] else 'NO APTA'}")
+    return {
+        "lote_id"     : lid,
+        "numero_lote" : row['numero_lote'],
+        "apta"        : row['apta'],
+        "motivo"      : row['motivo_rechazo'],
+        "accion_servo": "derecha" if row['apta'] else "izquierda",
+        "mensaje"     : "Leche APTA ✓" if row['apta'] else f"NO APTA ✗ — {row['motivo_rechazo']}"
+    }
+
+
+@app.get("/lotes", tags=["Lotes"])
+async def listar_lotes(
+    limit:  int            = Query(50,  ge=1, le=500),
+    apta:   Optional[bool] = Query(None),
+    origen: Optional[str]  = Query(None),
+    desde:  Optional[date] = Query(None),
+    hasta:  Optional[date] = Query(None),
+):
+    """Lista todos los lotes con filtros opcionales."""
+    db = await get_db()
+    sql = "SELECT * FROM vista_trazabilidad WHERE 1=1"
+    p=[]; i=1
+    if apta   is not None: sql+=f" AND apta=${i}";             p.append(apta);          i+=1
+    if origen:             sql+=f" AND origen ILIKE ${i}";     p.append(f"%{origen}%"); i+=1
+    if desde:              sql+=f" AND fecha_recepcion>=${i}"; p.append(desde);         i+=1
+    if hasta:              sql+=f" AND fecha_recepcion<=${i}"; p.append(hasta);         i+=1
+    sql+=f" ORDER BY creado_en DESC LIMIT ${i}"; p.append(limit)
+    rows = await db.fetch(sql, *p)
+    return {"total": len(rows), "lotes": recs(rows)}
+
+
+@app.get("/lotes/{lote_id}", tags=["Lotes"])
+async def detalle_lote(lote_id: int):
+    """Detalle completo de un lote. Panel lateral de Trazabilidad."""
+    db  = await get_db()
+    row = await db.fetchrow("SELECT * FROM vista_trazabilidad WHERE id=$1", lote_id)
+    if not row: raise HTTPException(404, "Lote no encontrado")
+    return rec(row)
+
+
+# ── INVENTARIO ───────────────────────────────────────────────
+
+@app.get("/inventario", tags=["Inventario"])
+async def inventario():
+    """Totales acumulados y desglose por finca. Vista Inventario."""
+    db        = await get_db()
+    resumen   = await db.fetchrow("SELECT * FROM vista_inventario")
+    semana    = await db.fetch(
+        """SELECT fecha_recepcion AS dia, COUNT(*) AS recepciones,
+                  COALESCE(SUM(litros),0) AS litros,
+                  ROUND(AVG(litros),2) AS promedio,
+                  COUNT(*) FILTER(WHERE apta=TRUE)  AS aptas,
+                  COUNT(*) FILTER(WHERE apta=FALSE) AS rechazadas
+           FROM lotes WHERE fecha_recepcion >= CURRENT_DATE-7
+           GROUP BY fecha_recepcion ORDER BY fecha_recepcion DESC"""
+    )
+    por_finca = await db.fetch(
+        """SELECT origen, COUNT(*) AS recepciones,
+                  COALESCE(SUM(litros),0) AS total_litros,
+                  ROUND(AVG(densidad),4)  AS densidad_prom
+           FROM lotes WHERE fecha_recepcion >= CURRENT_DATE-30
+           GROUP BY origen ORDER BY total_litros DESC LIMIT 10"""
+    )
+    return {"resumen": rec(resumen), "semana": recs(semana), "por_finca": recs(por_finca)}
+
+
+# ── TRAZABILIDAD ─────────────────────────────────────────────
+
+@app.get("/trazabilidad", tags=["Trazabilidad"])
+async def trazabilidad(
+    origen: Optional[str] = Query(None),
+    dias:   int           = Query(30, ge=1, le=365)
+):
+    """Historial agrupado por finca. Vista Trazabilidad."""
+    db  = await get_db()
+    sql = """
+        SELECT origen, COUNT(*) AS total_recepciones,
+               COALESCE(SUM(litros),0) AS total_litros,
+               ROUND(AVG(COALESCE(ph_manual,ph_sensor)),2) AS ph_prom,
+               ROUND(AVG(temperatura),2) AS temp_prom,
+               ROUND(AVG(densidad),4) AS densidad_prom,
+               MIN(fecha_recepcion) AS primera_recepcion,
+               MAX(fecha_recepcion) AS ultima_recepcion,
+               COUNT(*) FILTER(WHERE apta=TRUE)  AS aptas,
+               COUNT(*) FILTER(WHERE apta=FALSE) AS rechazadas
+        FROM lotes WHERE fecha_recepcion >= CURRENT_DATE-$1
+    """
+    p=[dias]
+    if origen: sql+=" AND origen ILIKE $2"; p.append(f"%{origen}%")
+    sql+=" GROUP BY origen ORDER BY total_litros DESC"
+    rows = await db.fetch(sql, *p)
+    return {"dias": dias, "total_fincas": len(rows), "fincas": recs(rows)}
+
+
+# ── ALERTAS ──────────────────────────────────────────────────
+
+@app.get("/alertas", tags=["Alertas"])
+async def listar_alertas(
+    horas:    int  = Query(24, ge=1, le=720),
+    resuelta: bool = Query(False)
+):
+    """Alertas de temperatura y pH fuera de rango. Vista Alertas y badge campana."""
+    db   = await get_db()
+    rows = await db.fetch(
+        """SELECT a.id,a.tipo,a.valor,a.limite,a.resuelta,a.creada_en,
+                  l.numero_lote,l.origen
+           FROM alertas a LEFT JOIN lotes l ON a.lote_id=l.id
+           WHERE a.creada_en >= NOW()-($1||' hours')::INTERVAL
+             AND a.resuelta=$2
+           ORDER BY a.creada_en DESC LIMIT 100""",
+        str(horas), resuelta
+    )
+    return {"total": len(rows), "alertas": recs(rows)}
+
+
+@app.patch("/alertas/{alerta_id}/resolver", tags=["Alertas"])
+async def resolver(alerta_id: int):
+    db = await get_db()
+    r  = await db.execute("UPDATE alertas SET resuelta=TRUE WHERE id=$1", alerta_id)
+    if r == "UPDATE 0": raise HTTPException(404, "Alerta no encontrada")
+    return {"mensaje": "Alerta resuelta"}
+
+
+# ── UMBRALES ─────────────────────────────────────────────────
+
+@app.get("/umbrales", tags=["Configuración"])
+async def get_umbrales():
+    """ESP32 descarga esto al encenderse. Frontend lo muestra en Configuración."""
+    db  = await get_db()
+    row = await db.fetchrow("SELECT * FROM umbrales_calidad WHERE activo=TRUE ORDER BY id LIMIT 1")
+    if not row: raise HTTPException(404, "Sin umbrales. Ejecuta el schema.sql.")
+    return rec(row)
+
+
+@app.put("/umbrales", tags=["Configuración"])
+async def put_umbrales(d: Umbrales):
+    """Actualiza rangos sin reiniciar el sistema ni el ESP32."""
+    db = await get_db()
+    r  = await db.execute(
+        """UPDATE umbrales_calidad
+           SET temp_min=$1,temp_max=$2,ph_min=$3,ph_max=$4,
+               densidad_min=$5,densidad_max=$6,
+               actualizado_en=NOW(),actualizado_por=$7
+           WHERE activo=TRUE""",
+        d.temp_min, d.temp_max, d.ph_min, d.ph_max,
+        d.densidad_min, d.densidad_max, d.actualizado_por
+    )
+    if r=="UPDATE 0": raise HTTPException(500, "No se actualizó. Verifica la tabla umbrales_calidad.")
+    return {"mensaje": "Umbrales actualizados correctamente."}
+
+
+# ── PROVEEDORES ──────────────────────────────────────────────
+
+@app.get("/proveedores", tags=["Proveedores"])
+async def get_proveedores():
+    """Lista de fincas para el dropdown del formulario de Análisis."""
+    db   = await get_db()
+    rows = await db.fetch(
+        "SELECT id,nombre,contacto,municipio FROM proveedores WHERE activo=TRUE ORDER BY nombre"
+    )
+    return {"proveedores": recs(rows)}
+
+
+@app.post("/proveedores", tags=["Proveedores"], status_code=201)
+async def crear_proveedor(
+    nombre: str, contacto: Optional[str]=None,
+    telefono: Optional[str]=None, municipio: Optional[str]=None,
+    departamento: Optional[str]="Zacapa"
+):
+    """Registra una nueva finca proveedora."""
+    db = await get_db()
+    try:
+        pid = await db.fetchval(
+            "INSERT INTO proveedores(nombre,contacto,telefono,municipio,departamento)"
+            " VALUES($1,$2,$3,$4,$5) RETURNING id",
+            nombre.strip().title(), contacto, telefono, municipio, departamento
+        )
+        return {"id": pid, "mensaje": f"Proveedor '{nombre}' registrado"}
+    except Exception as e:
+        if "unique" in str(e).lower():
+            raise HTTPException(409, f"Ya existe '{nombre}'")
+        raise HTTPException(500, str(e))
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("app.main:app", host="0.0.0.0", port=PORT, reload=True)"
+    
+entonces quiero que me des el codigo completo para poder cambiarlo ya que funcione, eso si solo quiero el codigo de los archivos necesarios para asi poder copiarlo y pegarlos solamente quiero eso no quiero que me generes todo el proyecto 
+
+
+
+
+------------------------
+
+al momento de ejecutar y correr el programa me sale este mensaje "PS C:\Users\Usuario\Documents\Proyecto de Graduacion\Desarrollo del Proyecto\Proyecto lacteos-oriente\bk> .\venv\Scripts\activate
+(venv) PS C:\Users\Usuario\Documents\Proyecto de Graduacion\Desarrollo del Proyecto\Proyecto lacteos-oriente\bk> uvicorn app.main:app --reload --port 8000
+INFO:     Will watch for changes in these directories: ['C:\\Users\\Usuario\\Documents\\Proyecto de Graduacion\\Desarrollo del Proyecto\\Proyecto lacteos-oriente\\bk']
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+INFO:     Started reloader process [8812] using WatchFiles
+Process SpawnProcess-1:
+Traceback (most recent call last):
+  File "C:\Users\Usuario\AppData\Local\Programs\Python\Python311\Lib\multiprocessing\process.py", line 314, in _bootstrap
+    self.run()
+  File "C:\Users\Usuario\AppData\Local\Programs\Python\Python311\Lib\multiprocessing\process.py", line 108, in run
+    self._target(*self._args, **self._kwargs)
+  File "C:\Users\Usuario\Documents\Proyecto de Graduacion\Desarrollo del Proyecto\Proyecto lacteos-oriente\bk\venv\Lib\site-packages\uvicorn\_subprocess.py", line 78, in subprocess_started
+    target(sockets=sockets)
+  File "C:\Users\Usuario\Documents\Proyecto de Graduacion\Desarrollo del Proyecto\Proyecto lacteos-oriente\bk\venv\Lib\site-packages\uvicorn\server.py", line 65, in run
+    return asyncio.run(self.serve(sockets=sockets))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Usuario\AppData\Local\Programs\Python\Python311\Lib\asyncio\runners.py", line 190, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "C:\Users\Usuario\AppData\Local\Programs\Python\Python311\Lib\asyncio\runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Usuario\AppData\Local\Programs\Python\Python311\Lib\asyncio\base_events.py", line 654, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "C:\Users\Usuario\Documents\Proyecto de Graduacion\Desarrollo del Proyecto\Proyecto lacteos-oriente\bk\venv\Lib\site-packages\uvicorn\server.py", line 69, in serve
+    await self._serve(sockets)
+  File "C:\Users\Usuario\Documents\Proyecto de Graduacion\Desarrollo del Proyecto\Proyecto lacteos-oriente\bk\venv\Lib\site-packages\uvicorn\server.py", line 76, in _serve
+    config.load()
+  File "C:\Users\Usuario\Documents\Proyecto de Graduacion\Desarrollo del Proyecto\Proyecto lacteos-oriente\bk\venv\Lib\site-packages\uvicorn\config.py", line 433, in load
+    self.loaded_app = import_from_string(self.app)
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Usuario\Documents\Proyecto de Graduacion\Desarrollo del Proyecto\Proyecto lacteos-oriente\bk\venv\Lib\site-packages\uvicorn\importer.py", line 22, in import_from_string
+    raise exc from None
+  File "C:\Users\Usuario\Documents\Proyecto de Graduacion\Desarrollo del Proyecto\Proyecto lacteos-oriente\bk\venv\Lib\site-packages\uvicorn\importer.py", line 19, in import_from_string
+    module = importlib.import_module(module_str)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Usuario\AppData\Local\Programs\Python\Python311\Lib\importlib\__init__.py", line 126, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<frozen importlib._bootstrap>", line 1204, in _gcd_import
+  File "<frozen importlib._bootstrap>", line 1176, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1147, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 690, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 940, in exec_module
+  File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+  File "C:\Users\Usuario\Documents\Proyecto de Graduacion\Desarrollo del Proyecto\Proyecto lacteos-oriente\bk\app\main.py", line 20, in <module>
+    from app.core.auth     import hash_password, verify_password, create_token, decode_token
+  File "C:\Users\Usuario\Documents\Proyecto de Graduacion\Desarrollo del Proyecto\Proyecto lacteos-oriente\bk\app\core\auth.py", line 4, in <module>
+    import bcrypt
+ModuleNotFoundError: No module named 'bcrypt'" 
+-----------------------------------------------------------------------------------------
+{
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxIiwidXN1YXJpbyI6ImFkbWluIiwicm9sIjoiYWRtaW5pc3RyYWRvciIsImV4cCI6MTc5MDIyNzYxNX0.5J1IGke5Xt574jkw8dFDVVuY6fBjgo7g_OzOO_YYgko",
+  "usuario": "admin",
+  "nombre": "Administrador",
+  "email": "admin@lacteosdeoriente.gt",
+  "rol": "administrador",
+  "initials": "A"
+}src/components/Layout.jsx
+
+------------------------------------------------------------------------------------
+1	Administrador	admin	Admin2025	administrador
+2	Carlos Méndez	carlos.mendez	Operador2025	operador
+3	Fernando Morales	fernandomo	SoyF3rnando.	operador
+Nombre de usuario *
+
+DavoPerez
+
+Contraseña * (mín. 6 caracteres)
+
+DavodPerez.1
+Nombre de usuario *
+
+EdyMora
+
+Contrasena * (mín. 6 caractere
+
+edyferemi
