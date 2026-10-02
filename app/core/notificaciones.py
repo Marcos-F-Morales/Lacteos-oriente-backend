@@ -92,13 +92,11 @@ async def alerta_analisis_inmediato(finca: str, operador: str,
     antes de que el operador guarde el registro.
     """
     await notificar_admins(
-        f"⚠️ *ANÁLISIS NO APTA — Lácteos de Oriente*\n\n"
-        f"Se detectó leche fuera de rango\n"
+        f"🔴 *ALERTA — Lácteos de Oriente*\n\n"
+        f"Leche NO APTA detectada\n"
         f"📍 Finca: {finca}\n"
         f"👤 Operador: {operador}\n"
-        f"🥛 Litros: {litros} L\n"
         f"⚠️ Motivo: {motivo}\n\n"
-        f"_El operador aún no ha guardado el registro._\n\n"
         f"🔗 Ver sistema: {DOMINIO}"
     )
 
