@@ -1,39 +1,58 @@
-import asyncpg, logging
-from datetime import date, datetime
-from app.core.config import DATABASE_URL
+# app/core/database.py
+import asyncpg
+import logging
+import os
 
-logger = logging.getLogger(__name__)
-_pool  = None
+log = logging.getLogger(__name__)
+_pool = None
+
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    "postgresql://postgres:password@localhost:5432/lacteos_oriente"
+)
+
 
 async def init_db():
     global _pool
     if _pool is None:
+        # Parsear la URL para extraer los componentes
+        # y agregar SSL requerido por Supabase en producción
         _pool = await asyncpg.create_pool(
-            DATABASE_URL, min_size=2, max_size=10,
-            command_timeout=30, statement_cache_size=0
+            DATABASE_URL,
+            min_size=1,
+            max_size=10,
+            command_timeout=60,
+            ssl="require"   # ← Requerido por Supabase desde la nube
         )
-        async with _pool.acquire() as c:
-            await c.execute("SELECT 1")
-        logger.info("✓ PostgreSQL conectado")
+        async with _pool.acquire() as conn:
+            await conn.execute("SELECT 1")
+        log.info("✓ PostgreSQL conectado a Supabase")
     return _pool
+
 
 async def close_db():
     global _pool
     if _pool:
-        await _pool.close(); _pool = None
+        await _pool.close()
+        _pool = None
+        log.info("PostgreSQL desconectado")
+
 
 async def get_db():
-    global _pool
-    if _pool is None: await init_db()
+    if _pool is None:
+        await init_db()
     return _pool
 
-def rec(row):
-    if row is None: return None
-    d = {}
-    for k, v in dict(row).items():
-        if isinstance(v, (date, datetime)): d[k] = v.isoformat()
-        elif hasattr(v,'__float__') and not isinstance(v,(int,float,bool)): d[k] = float(v)
-        else: d[k] = v
-    return d
 
-def recs(rows): return [rec(r) for r in rows]
+def rec(row):
+    """Convierte un asyncpg Record a dict."""
+    if row is None:
+        return None
+    return dict(row)
+
+
+def recs(rows):
+    """Convierte una lista de asyncpg Records a lista de dicts."""
+    if not rows:
+        return []
+    return [dict(r) for r in rows]
