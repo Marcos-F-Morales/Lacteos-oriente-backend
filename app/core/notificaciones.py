@@ -7,6 +7,8 @@ from app.core.config import TELEGRAM_TOKEN, TELEGRAM_ACTIVO, TELEGRAM_CHAT_ID
 
 log = logging.getLogger(__name__)
 
+DOMINIO = "https://lacteosdeoriente.online"
+
 
 def enviar_telegram_a(chat_id: str, mensaje: str):
     """Envía un mensaje a un Chat ID específico de Telegram."""
@@ -59,7 +61,6 @@ async def notificar_admins(mensaje: str):
     import asyncio
     chat_ids = await obtener_chat_ids_admins()
 
-    # Respaldo: si nadie tiene Chat ID en BD, usa el del .env
     if not chat_ids and TELEGRAM_CHAT_ID:
         chat_ids = [TELEGRAM_CHAT_ID]
 
@@ -73,14 +74,32 @@ async def notificar_admins(mensaje: str):
 
 async def alerta_lote_no_apto(numero_lote: str, origen: str,
                                motivo: str, operador: str = ""):
-    """Notifica cuando un lote es clasificado como NO APTA."""
+    """Notifica cuando un lote es clasificado como NO APTA y ya fue guardado."""
     await notificar_admins(
         f"🔴 *ALERTA — Lácteos de Oriente*\n\n"
         f"Lote *{numero_lote}* fue rechazado\n"
         f"📍 Finca: {origen}\n"
         f"👤 Operador: {operador}\n"
         f"⚠️ Motivo: {motivo}\n\n"
-        f"Ingresa al sistema para más detalles."
+        f"🔗 Ver sistema: {DOMINIO}"
+    )
+
+
+async def alerta_analisis_inmediato(finca: str, operador: str,
+                                     litros: str, motivo: str):
+    """
+    Notifica cuando el análisis sale NO APTA EN EL MOMENTO,
+    antes de que el operador guarde el registro.
+    """
+    await notificar_admins(
+        f"⚠️ *ANÁLISIS NO APTA — Lácteos de Oriente*\n\n"
+        f"Se detectó leche fuera de rango\n"
+        f"📍 Finca: {finca}\n"
+        f"👤 Operador: {operador}\n"
+        f"🥛 Litros: {litros} L\n"
+        f"⚠️ Motivo: {motivo}\n\n"
+        f"_El operador aún no ha guardado el registro._\n\n"
+        f"🔗 Ver sistema: {DOMINIO}"
     )
 
 
@@ -100,5 +119,5 @@ async def alerta_sensor(tipo: str, valor: float, limite: float):
         f"*{nombre}*\n"
         f"Valor detectado: `{val_txt}`\n"
         f"Límite configurado: `{lim_txt}`\n\n"
-        f"Verifica el sistema inmediatamente."
+        f"🔗 Ver sistema: {DOMINIO}"
     )

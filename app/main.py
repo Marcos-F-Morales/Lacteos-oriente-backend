@@ -17,7 +17,7 @@ import logging
 from app.core.config         import CORS_ORIGINS, PORT, ENVIRONMENT, TELEGRAM_TOKEN
 from app.core.database       import init_db, close_db, get_db, rec, recs
 from app.core.auth           import hash_password, verify_password, create_token, decode_token
-from app.core.notificaciones import alerta_lote_no_apto, alerta_sensor
+from app.core.notificaciones import alerta_lote_no_apto, alerta_sensor, alerta_analisis_inmediato
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 log = logging.getLogger(__name__)
@@ -624,6 +624,22 @@ async def resolver(alerta_id: int):
     )
     if r == "UPDATE 0": raise HTTPException(404, "Alerta no encontrada")
     return {"mensaje": "Alerta resuelta"}
+
+
+@app.post("/alertas/telegram", tags=["Alertas"])
+async def alerta_telegram_inmediata(datos: dict):
+    """
+    El frontend llama aquí cuando el análisis sale NO APTA
+    de forma inmediata, sin esperar a que el operador guarde el lote.
+    """
+    finca    = datos.get("finca",    "Desconocida")
+    operador = datos.get("operador", "Desconocido")
+    litros   = datos.get("litros",   "—")
+    motivo   = datos.get("motivo",   "Parámetros fuera de rango")
+    asyncio.create_task(
+        alerta_analisis_inmediato(finca, operador, str(litros), motivo)
+    )
+    return {"enviado": True}
 
 
 # ============================================================
