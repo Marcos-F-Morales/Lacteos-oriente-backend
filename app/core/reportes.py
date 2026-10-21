@@ -7,7 +7,6 @@ from app.core.database import get_db, recs, rec
 router = APIRouter(prefix="/reportes", tags=["Reportes"])
 
 
-# ── Helper: rango de fechas ────────────────────────────────────────────
 def _rango(periodo: str):
     hoy = datetime.utcnow()
     if periodo == "dia":
@@ -16,12 +15,11 @@ def _rango(periodo: str):
         inicio = (hoy - timedelta(days=hoy.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
     elif periodo == "mes":
         inicio = hoy.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    else:  # "todo"
+    else:
         inicio = datetime(2000, 1, 1)
     return inicio, hoy
 
 
-# ── GET /reportes/lotes ────────────────────────────────────────────────
 @router.get("/lotes")
 async def reporte_lotes(
     periodo: str = Query("mes", enum=["dia", "semana", "mes", "todo"]),
@@ -46,7 +44,7 @@ async def reporte_lotes(
                 l.litros,
                 l.ph_manual,
                 l.ph_sensor,
-                l.temperatura_sensor,
+                l.temperatura,
                 l.apta,
                 l.motivo_rechazo,
                 l.creado_en
@@ -73,7 +71,6 @@ async def reporte_lotes(
     }
 
 
-# ── GET /reportes/inventario ───────────────────────────────────────────
 @router.get("/inventario")
 async def reporte_inventario(
     periodo: str = Query("mes", enum=["dia", "semana", "mes", "todo"]),
@@ -90,7 +87,7 @@ async def reporte_inventario(
                 SUM(CASE WHEN l.apta     THEN l.litros ELSE 0 END) AS litros_aptos,
                 SUM(CASE WHEN NOT l.apta THEN l.litros ELSE 0 END) AS litros_rechazados,
                 AVG(COALESCE(l.ph_manual, l.ph_sensor))            AS ph_promedio,
-                AVG(l.temperatura_sensor)                           AS temp_promedio
+                AVG(l.temperatura)                                  AS temp_promedio
             FROM lotes l
             LEFT JOIN proveedores p ON p.id = l.proveedor_id
             WHERE l.creado_en BETWEEN $1 AND $2
@@ -109,13 +106,12 @@ async def reporte_inventario(
         """, inicio, fin)
 
     return {
-        "periodo":         periodo,
-        "resumen_global":  rec(global_row),
-        "por_finca":       recs(rows),
+        "periodo":        periodo,
+        "resumen_global": rec(global_row),
+        "por_finca":      recs(rows),
     }
 
 
-# ── GET /reportes/alertas ──────────────────────────────────────────────
 @router.get("/alertas")
 async def reporte_alertas(
     periodo: str = Query("mes", enum=["dia", "semana", "mes", "todo"]),
