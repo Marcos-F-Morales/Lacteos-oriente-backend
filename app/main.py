@@ -18,6 +18,7 @@ from app.core.config         import CORS_ORIGINS, PORT, ENVIRONMENT, TELEGRAM_TO
 from app.core.database       import init_db, close_db, get_db, rec, recs
 from app.core.auth           import hash_password, verify_password, create_token, decode_token
 from app.core.notificaciones import alerta_lote_no_apto, alerta_sensor, alerta_analisis_inmediato
+from app.core.reportes       import router as reportes_router   # ← NUEVO
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 log = logging.getLogger(__name__)
@@ -37,16 +38,19 @@ app.add_middleware(
     allow_headers     = ["*"],
 )
 
+app.include_router(reportes_router)   # ← NUEVO
+
 @app.on_event("startup")
 async def startup():
     await init_db()
-    # Inicia el bot de Telegram en segundo plano
     from app.core.bot_telegram import iniciar_bot
     asyncio.create_task(iniciar_bot())
 
 @app.on_event("shutdown")
 async def shutdown():
     await close_db()
+
+# ... (el resto es idéntico a tu versión actual)
 
 
 # ── Seguridad JWT ─────────────────────────────────────────────
