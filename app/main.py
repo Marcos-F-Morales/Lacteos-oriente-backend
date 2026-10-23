@@ -4,12 +4,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from contextlib import asynccontextmanager
 from typing import Optional
-from datetime import datetime
-import asyncpg
 
 from app.core.config import CORS_ORIGINS
 from app.core.database import get_db, recs, rec
-from app.core.auth import crear_token, verificar_token, hashear_password, verificar_password
+from app.core.auth import create_token, decode_token, hash_password, verify_password
 from app.core.reportes import router as reportes_router
 
 # ── Modelos Pydantic ───────────────────────────────────────────
@@ -20,22 +18,22 @@ class LoginData(BaseModel):
     password: str
 
 class LoteData(BaseModel):
-    numero_lote:    str
-    origen:         str
-    litros:         float
-    ph_manual:      Optional[float] = None
-    temperatura:    Optional[float] = None
-    observaciones:  Optional[str]   = None
-    proveedor_id:   Optional[int]   = None
+    numero_lote:   str
+    origen:        str
+    litros:        float
+    ph_manual:     Optional[float] = None
+    temperatura:   Optional[float] = None
+    observaciones: Optional[str]   = None
+    proveedor_id:  Optional[int]   = None
 
 class UmbralData(BaseModel):
-    ph_min:        float
-    ph_max:        float
-    temp_min:      float
-    temp_max:      float
-    acidez_max:    Optional[float] = None
-    densidad_min:  Optional[float] = None
-    densidad_max:  Optional[float] = None
+    ph_min:       float
+    ph_max:       float
+    temp_min:     float
+    temp_max:     float
+    acidez_max:   Optional[float] = None
+    densidad_min: Optional[float] = None
+    densidad_max: Optional[float] = None
 
 class UsuarioData(BaseModel):
     nombre:   str
@@ -57,7 +55,7 @@ class AlertaTelegramData(BaseModel):
 # ── App ────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await get_db()   # inicializa pool
+    await get_db()
     yield
 
 app = FastAPI(title="Lácteos de Oriente API", lifespan=lifespan)
@@ -76,14 +74,15 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
 # ── Helpers auth ───────────────────────────────────────────────
 async def get_current_user(token: str = Depends(oauth2_scheme)):
-    payload = verificar_token(token)
-    if not payload:
+    try:
+        payload = decode_token(token)
+    except Exception:
         raise HTTPException(status_code=401, detail="Token inválido o expirado")
     pool = await get_db()
     async with pool.acquire() as conn:
         user = await conn.fetchrow(
             "SELECT u.*, r.nombre AS rol FROM usuarios u JOIN roles r ON r.id = u.rol_id WHERE u.id = $1",
-            payload["sub"]
+            int(payload["sub"])
         )
     if not user:
         raise HTTPException(status_code=401, detail="Usuario no encontrado")
@@ -98,9 +97,9 @@ async def login(form: OAuth2PasswordRequestForm = Depends()):
             "SELECT u.*, r.nombre AS rol FROM usuarios u JOIN roles r ON r.id = u.rol_id WHERE u.username = $1 AND u.activo = true",
             form.username
         )
-    if not user or not verificar_password(form.password, user["password_hash"]):
+    if not user or not verify_password(form.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Credenciales incorrectas")
-    token = crear_token({"sub": user["id"], "rol": user["rol"]})
+    token = create_token(user["id"], user["username"], user["rol"])
     return {"access_token": token, "token_type": "bearer", "rol": user["rol"], "nombre": user["nombre"]}
 
 @app.get("/auth/me")
@@ -155,7 +154,7 @@ async def crear_lote(d: LoteData, current_user=Depends(get_current_user)):
             d.origen.strip()
         )
 
-        # 2. Obtener proveedor_id por nombre (fix: ya no queda NULL)
+        # 2. Obtener proveedor_id por nombre
         proveedor_id = d.proveedor_id or await conn.fetchval(
             "SELECT id FROM proveedores WHERE LOWER(nombre) = LOWER($1)",
             d.origen.strip()
@@ -193,7 +192,7 @@ async def crear_lote(d: LoteData, current_user=Depends(get_current_user)):
         )
 
         # 6. Registrar alerta si no apta
-        if not apta:
+        if not apta and umbrales:
             await conn.execute(
                 """
                 INSERT INTO alertas (tipo, valor, limite, lote_id, resuelta, creada_en)
@@ -209,14 +208,14 @@ async def crear_lote(d: LoteData, current_user=Depends(get_current_user)):
 
 @app.get("/lotes")
 async def listar_lotes(
-    limit:  int           = 50,
-    offset: int           = 0,
-    apta:   Optional[bool]= None,
+    limit:  int            = 50,
+    offset: int            = 0,
+    apta:   Optional[bool] = None,
     current_user=Depends(get_current_user)
 ):
     pool = await get_db()
     async with pool.acquire() as conn:
-        where = "WHERE 1=1"
+        where  = "WHERE 1=1"
         params = []
         if apta is not None:
             params.append(apta)
@@ -262,8 +261,8 @@ async def inventario(current_user=Depends(get_current_user)):
                 COALESCE(p.nombre, l.origen) AS finca,
                 COUNT(*)                      AS total_lotes,
                 SUM(l.litros)                 AS total_litros,
-                SUM(CASE WHEN l.apta THEN l.litros ELSE 0 END)     AS litros_aptos,
-                SUM(CASE WHEN NOT l.apta THEN l.litros ELSE 0 END)  AS litros_rechazados
+                SUM(CASE WHEN l.apta THEN l.litros ELSE 0 END)    AS litros_aptos,
+                SUM(CASE WHEN NOT l.apta THEN l.litros ELSE 0 END) AS litros_rechazados
             FROM lotes l
             LEFT JOIN proveedores p ON p.id = l.proveedor_id
             GROUP BY COALESCE(p.nombre, l.origen)
@@ -283,8 +282,8 @@ async def trazabilidad(
 ):
     pool = await get_db()
     async with pool.acquire() as conn:
-        filtros  = []
-        params   = []
+        filtros = []
+        params  = []
 
         if finca:
             params.append(f"%{finca}%")
@@ -344,15 +343,11 @@ async def listar_alertas(
 async def resolver_alerta(alerta_id: int, current_user=Depends(get_current_user)):
     pool = await get_db()
     async with pool.acquire() as conn:
-        await conn.execute(
-            "UPDATE alertas SET resuelta = true WHERE id = $1",
-            alerta_id
-        )
+        await conn.execute("UPDATE alertas SET resuelta = true WHERE id = $1", alerta_id)
     return {"ok": True}
 
 @app.post("/alertas/telegram")
 async def enviar_telegram(datos: AlertaTelegramData, current_user=Depends(get_current_user)):
-    # Implementar con bot de Telegram si se requiere
     return {"ok": True, "mensaje": datos.mensaje}
 
 # ── Umbrales ───────────────────────────────────────────────────
@@ -421,7 +416,7 @@ async def crear_usuario(datos: UsuarioData, current_user=Depends(get_current_use
             raise HTTPException(status_code=400, detail="Username ya existe")
         uid = await conn.fetchval(
             "INSERT INTO usuarios (nombre, username, password_hash, rol_id, activo) VALUES ($1,$2,$3,$4,$5) RETURNING id",
-            datos.nombre, datos.username, hashear_password(datos.password), datos.rol_id, datos.activo
+            datos.nombre, datos.username, hash_password(datos.password), datos.rol_id, datos.activo
         )
     return {"id": uid}
 
@@ -429,15 +424,15 @@ async def crear_usuario(datos: UsuarioData, current_user=Depends(get_current_use
 async def actualizar_usuario(uid: int, datos: UsuarioUpdate, current_user=Depends(get_current_user)):
     pool = await get_db()
     async with pool.acquire() as conn:
-        if datos.nombre is not None:
+        if datos.nombre   is not None:
             await conn.execute("UPDATE usuarios SET nombre=$1 WHERE id=$2", datos.nombre, uid)
         if datos.username is not None:
             await conn.execute("UPDATE usuarios SET username=$1 WHERE id=$2", datos.username, uid)
         if datos.password is not None:
-            await conn.execute("UPDATE usuarios SET password_hash=$1 WHERE id=$2", hashear_password(datos.password), uid)
-        if datos.rol_id is not None:
+            await conn.execute("UPDATE usuarios SET password_hash=$1 WHERE id=$2", hash_password(datos.password), uid)
+        if datos.rol_id   is not None:
             await conn.execute("UPDATE usuarios SET rol_id=$1 WHERE id=$2", datos.rol_id, uid)
-        if datos.activo is not None:
+        if datos.activo   is not None:
             await conn.execute("UPDATE usuarios SET activo=$1 WHERE id=$2", datos.activo, uid)
     return {"ok": True}
 
@@ -457,7 +452,11 @@ async def listar_roles(current_user=Depends(get_current_user)):
     return [dict(r) for r in rows]
 
 @app.post("/roles")
-async def crear_rol(nombre: str = Query(...), descripcion: str = Query(""), current_user=Depends(get_current_user)):
+async def crear_rol(
+    nombre:      str = Query(...),
+    descripcion: str = Query(""),
+    current_user=Depends(get_current_user)
+):
     pool = await get_db()
     async with pool.acquire() as conn:
         rid = await conn.fetchval(
