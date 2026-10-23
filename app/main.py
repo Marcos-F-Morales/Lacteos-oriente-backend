@@ -9,7 +9,7 @@ import asyncpg
 
 from app.core.config import CORS_ORIGINS
 from app.core.database import get_db, recs, rec
-from app.core.security import crear_token, verificar_token, hashear_password, verificar_password
+from app.core.auth import crear_token, verificar_token, hashear_password, verificar_password
 from app.core.reportes import router as reportes_router
 
 # ── Modelos Pydantic ───────────────────────────────────────────
