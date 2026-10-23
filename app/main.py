@@ -1,7 +1,7 @@
 # app/main.py
 from fastapi import FastAPI, Depends, HTTPException, status, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from fastapi.security import OAuth2PasswordBearer
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -90,14 +90,14 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
 
 # ── Auth ───────────────────────────────────────────────────────
 @app.post("/auth/login")
-async def login(form: OAuth2PasswordRequestForm = Depends()):
+async def login(datos: LoginData):
     pool = await get_db()
     async with pool.acquire() as conn:
         user = await conn.fetchrow(
             "SELECT u.*, r.nombre AS rol FROM usuarios u JOIN roles r ON r.id = u.rol_id WHERE u.username = $1 AND u.activo = true",
-            form.username
+            datos.username
         )
-    if not user or not verify_password(form.password, user["password_hash"]):
+    if not user or not verify_password(datos.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Credenciales incorrectas")
     token = create_token(user["id"], user["username"], user["rol"])
     return {"access_token": token, "token_type": "bearer", "rol": user["rol"], "nombre": user["nombre"]}
