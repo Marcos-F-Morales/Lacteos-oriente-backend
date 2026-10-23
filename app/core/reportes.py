@@ -56,9 +56,9 @@ async def reporte_lotes(
         """, *params)
 
     lotes = recs(rows)
-    total_litros  = sum(float(r["litros"] or 0) for r in lotes)
-    aptas         = sum(1 for r in lotes if r["apta"])
-    no_aptas      = len(lotes) - aptas
+    total_litros = sum(float(r["litros"] or 0) for r in lotes)
+    aptas        = sum(1 for r in lotes if r["apta"])
+    no_aptas     = len(lotes) - aptas
 
     return {
         "periodo":      periodo,
@@ -124,14 +124,15 @@ async def reporte_alertas(
             SELECT
                 a.id,
                 a.tipo,
-                a.mensaje,
+                a.valor,
+                a.limite,
                 a.resuelta,
-                a.creado_en,
+                a.creada_en,
                 l.numero_lote
             FROM alertas a
             LEFT JOIN lotes l ON l.id = a.lote_id
-            WHERE a.creado_en BETWEEN $1 AND $2
-            ORDER BY a.creado_en DESC
+            WHERE a.creada_en BETWEEN $1 AND $2
+            ORDER BY a.creada_en DESC
         """, inicio, fin)
 
     alertas = recs(rows)
