@@ -1,23 +1,37 @@
 # app/core/reportes.py
 from fastapi import APIRouter, Query
 from typing import Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from app.core.database import get_db, recs, rec
 
 router = APIRouter(prefix="/reportes", tags=["Reportes"])
 
 
 def _rango(periodo: str):
-    hoy = datetime.utcnow()
+    hoy = datetime.utcnow().date()
     if periodo == "dia":
-        inicio = hoy.replace(hour=0, minute=0, second=0, microsecond=0)
+        inicio = hoy
     elif periodo == "semana":
-        inicio = (hoy - timedelta(days=hoy.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+        inicio = hoy - timedelta(days=hoy.weekday())
     elif periodo == "mes":
-        inicio = hoy.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        inicio = hoy.replace(day=1)
     else:
-        inicio = datetime(2000, 1, 1)
+        inicio = date(2000, 1, 1)
     return inicio, hoy
+
+
+@router.get("/fincas")
+async def listar_fincas():
+    """Devuelve las fincas únicas para el dropdown de Reportes."""
+    pool = await get_db()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT DISTINCT COALESCE(p.nombre, l.origen) AS nombre
+            FROM lotes l
+            LEFT JOIN proveedores p ON p.id = l.proveedor_id
+            ORDER BY 1
+        """)
+    return {"fincas": [r["nombre"] for r in rows]}
 
 
 @router.get("/lotes")
@@ -47,12 +61,13 @@ async def reporte_lotes(
                 l.temperatura,
                 l.apta,
                 l.motivo_rechazo,
+                l.fecha_recepcion,
                 l.creado_en
             FROM lotes l
             LEFT JOIN proveedores p ON p.id = l.proveedor_id
-            WHERE l.creado_en BETWEEN $1 AND $2
+            WHERE l.fecha_recepcion BETWEEN $1 AND $2
             {filtro_finca}
-            ORDER BY l.creado_en DESC
+            ORDER BY l.fecha_recepcion DESC
         """, *params)
 
     lotes = recs(rows)
@@ -90,7 +105,7 @@ async def reporte_inventario(
                 AVG(l.temperatura)                                  AS temp_promedio
             FROM lotes l
             LEFT JOIN proveedores p ON p.id = l.proveedor_id
-            WHERE l.creado_en BETWEEN $1 AND $2
+            WHERE l.fecha_recepcion BETWEEN $1 AND $2
             GROUP BY COALESCE(p.nombre, l.origen, 'Sin finca')
             ORDER BY total_litros DESC
         """, inicio, fin)
@@ -102,7 +117,7 @@ async def reporte_inventario(
                 SUM(CASE WHEN l.apta     THEN l.litros ELSE 0 END) AS litros_aptos,
                 SUM(CASE WHEN NOT l.apta THEN l.litros ELSE 0 END) AS litros_rechazados
             FROM lotes l
-            WHERE l.creado_en BETWEEN $1 AND $2
+            WHERE l.fecha_recepcion BETWEEN $1 AND $2
         """, inicio, fin)
 
     return {
@@ -131,7 +146,7 @@ async def reporte_alertas(
                 l.numero_lote
             FROM alertas a
             LEFT JOIN lotes l ON l.id = a.lote_id
-            WHERE a.creada_en BETWEEN $1 AND $2
+            WHERE a.creada_en::date BETWEEN $1 AND $2
             ORDER BY a.creada_en DESC
         """, inicio, fin)
 
